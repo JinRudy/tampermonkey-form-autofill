@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         表单自动填写助手
 // @namespace    https://github.com/JinRudy/tampermonkey-form-autofill
-// @version      0.1.3
+// @version      0.1.4
 // @description  手动填写一次表单后保存规则，后续按域名自动回填。
 // @author       wushui
 // @homepageURL  https://github.com/JinRudy/tampermonkey-form-autofill
@@ -392,6 +392,62 @@
     return element;
   }
 
+  function hasClass(element, className) {
+    if (!element) return false;
+    if (element.classList && typeof element.classList.contains === 'function') return element.classList.contains(className);
+    return String(element.className || '')
+      .split(/\s+/)
+      .includes(className);
+  }
+
+  function isRadioApplied(element) {
+    if (!element.checked) return false;
+
+    const wrapper = typeof element.closest === 'function' ? element.closest('label, .ant-radio-wrapper') : null;
+    const antRadio = typeof element.closest === 'function' ? element.closest('.ant-radio') : null;
+    const isAntdRadio = hasClass(wrapper, 'ant-radio-wrapper') || hasClass(antRadio, 'ant-radio');
+    if (!isAntdRadio) return true;
+
+    return hasClass(wrapper, 'ant-radio-wrapper-checked') || hasClass(antRadio, 'ant-radio-checked');
+  }
+
+  function captureScrollRestore(target) {
+    const positions = [];
+    const seen = new Set();
+
+    function add(element) {
+      if (!element || seen.has(element)) return;
+      seen.add(element);
+      positions.push({
+        element,
+        left: element.scrollLeft || 0,
+        top: element.scrollTop || 0,
+      });
+    }
+
+    add(document.scrollingElement || document.documentElement);
+
+    let node = target;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth) add(node);
+      node = node.parentElement;
+    }
+
+    return function restoreScroll() {
+      for (const position of positions) {
+        position.element.scrollLeft = position.left;
+        position.element.scrollTop = position.top;
+      }
+    };
+  }
+
+  function clickPreservingScroll(target) {
+    const restoreScroll = captureScrollRestore(target);
+    target.click();
+    restoreScroll();
+    setTimeout(restoreScroll, 0);
+  }
+
   function applyField(field) {
     if (!field || field.enabled === false) return false;
     const element = findField(field);
@@ -400,8 +456,9 @@
     const type = fieldType(element);
     if (type === 'radio') {
       if (!field.checked) return false;
+      if (isRadioApplied(element)) return true;
       const target = radioClickTarget(element);
-      if (target && !isOwnUiElement(target) && typeof target.click === 'function') target.click();
+      if (target && !isOwnUiElement(target) && typeof target.click === 'function') clickPreservingScroll(target);
       if (!element.checked) {
         setNativeProperty(element, 'checked', true);
         dispatchFieldEvents(element);

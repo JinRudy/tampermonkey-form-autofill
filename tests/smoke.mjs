@@ -30,6 +30,12 @@ class FakeElement {
     this.labels = props.labels || [];
     this.className = props.className || '';
     this.onClick = props.onClick || null;
+    this.scrollTop = props.scrollTop || 0;
+    this.scrollLeft = props.scrollLeft || 0;
+    this.scrollHeight = props.scrollHeight || 0;
+    this.scrollWidth = props.scrollWidth || 0;
+    this.clientHeight = props.clientHeight || 0;
+    this.clientWidth = props.clientWidth || 0;
 
     for (const [key, value] of Object.entries(props.attributes || {})) {
       this.setAttribute(key, value);
@@ -265,6 +271,7 @@ function buildDocument() {
 
 function buildControlledRadioDocument() {
   const document = new FakeDocument();
+  const scrollContainer = field('div', { scrollTop: 200, scrollHeight: 1000, clientHeight: 300 });
   const form = field('form', { id: 'antd-form' });
   const personalLabel = field('label', { className: 'ant-radio-wrapper', textContent: '个人' });
   const teamLabel = field('label', { className: 'ant-radio-wrapper', textContent: '组织/团队' });
@@ -276,21 +283,24 @@ function buildControlledRadioDocument() {
     team._checked = false;
     personalLabel.className = 'ant-radio-wrapper ant-radio-wrapper-checked';
     teamLabel.className = 'ant-radio-wrapper';
+    scrollContainer.scrollTop = 999;
   };
   teamLabel.onClick = () => {
     personal._checked = false;
     team._checked = true;
     personalLabel.className = 'ant-radio-wrapper';
     teamLabel.className = 'ant-radio-wrapper ant-radio-wrapper-checked';
+    scrollContainer.scrollTop = 999;
   };
 
   personalLabel.appendChild(personal);
   teamLabel.appendChild(team);
   form.appendChild(personalLabel);
   form.appendChild(teamLabel);
-  document.body.appendChild(form);
+  scrollContainer.appendChild(form);
+  document.body.appendChild(scrollContainer);
 
-  return { document, fields: { personal, team, personalLabel, teamLabel } };
+  return { document, fields: { personal, team, personalLabel, teamLabel, scrollContainer } };
 }
 
 async function loadUserscript(document) {
@@ -433,5 +443,11 @@ assert.equal(controlled.fields.teamLabel.clickCount, 0, 'unselected radio field 
 assert.equal(controlled.fields.personal.checked, true);
 assert.equal(controlled.fields.team.checked, false);
 assert.match(controlled.fields.personalLabel.className, /ant-radio-wrapper-checked/);
+assert.equal(controlled.fields.scrollContainer.scrollTop, 200, 'radio click restores the previous scroll position');
+
+controlled.fields.scrollContainer.scrollTop = 320;
+assert.equal(controlledApi.applyRule(controlledRule), 1, 'already selected radio still counts as applied');
+assert.equal(controlled.fields.personalLabel.clickCount, 1, 'already visually selected radio is not clicked again');
+assert.equal(controlled.fields.scrollContainer.scrollTop, 320, 'second autofill does not move the scroll position');
 
 console.log('smoke test passed');

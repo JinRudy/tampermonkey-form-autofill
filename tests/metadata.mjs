@@ -12,7 +12,7 @@ function metadataValue(key) {
   return match ? match[1].trim() : '';
 }
 
-assert.equal(metadataValue('version'), '0.1.3');
+assert.equal(metadataValue('version'), '0.1.4');
 assert.equal(metadataValue('name'), '表单自动填写助手');
 assert.equal(metadataValue('namespace'), 'https://github.com/JinRudy/tampermonkey-form-autofill');
 assert.equal(metadataValue('description'), '手动填写一次表单后保存规则，后续按域名自动回填。');
