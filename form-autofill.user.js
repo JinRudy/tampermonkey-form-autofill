@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         表单自动填写助手
 // @namespace    https://github.com/JinRudy/tampermonkey-form-autofill
-// @version      0.1.2
+// @version      0.1.3
 // @description  手动填写一次表单后保存规则，后续按域名自动回填。
 // @author       wushui
 // @homepageURL  https://github.com/JinRudy/tampermonkey-form-autofill
@@ -376,13 +376,40 @@
     element[property] = value;
   }
 
+  function radioClickTarget(element) {
+    const wrapper = typeof element.closest === 'function' ? element.closest('label, .ant-radio-wrapper') : null;
+    if (wrapper) return wrapper;
+
+    if (element.id) {
+      try {
+        const label = document.querySelector(`label[for="${attrEscape(element.id)}"]`);
+        if (label) return label;
+      } catch (_error) {
+        // Fall through to the input.
+      }
+    }
+
+    return element;
+  }
+
   function applyField(field) {
     if (!field || field.enabled === false) return false;
     const element = findField(field);
     if (!element || element.disabled || isOwnUiElement(element) || !shouldCaptureField(element)) return false;
 
     const type = fieldType(element);
-    if (type === 'checkbox' || type === 'radio') {
+    if (type === 'radio') {
+      if (!field.checked) return false;
+      const target = radioClickTarget(element);
+      if (target && !isOwnUiElement(target) && typeof target.click === 'function') target.click();
+      if (!element.checked) {
+        setNativeProperty(element, 'checked', true);
+        dispatchFieldEvents(element);
+      }
+      return true;
+    }
+
+    if (type === 'checkbox') {
       setNativeProperty(element, 'checked', Boolean(field.checked));
     } else {
       setNativeProperty(element, 'value', field.value == null ? '' : String(field.value));

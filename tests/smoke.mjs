@@ -24,9 +24,12 @@ class FakeElement {
     this.nativeCheckedSetCount = 0;
     this.directValueSetCount = 0;
     this.directCheckedSetCount = 0;
+    this.clickCount = 0;
     this.disabled = Boolean(props.disabled);
     this.textContent = props.textContent || '';
     this.labels = props.labels || [];
+    this.className = props.className || '';
+    this.onClick = props.onClick || null;
 
     for (const [key, value] of Object.entries(props.attributes || {})) {
       this.setAttribute(key, value);
@@ -53,7 +56,7 @@ class FakeElement {
 
   appendChild(child) {
     child.parentElement = this;
-    child.ownerDocument = this.ownerDocument;
+    assignOwnerDocument(child, this.ownerDocument);
     this.children.push(child);
     return child;
   }
@@ -62,6 +65,7 @@ class FakeElement {
     if (name === 'id') return this.id || null;
     if (name === 'name') return this.name || null;
     if (name === 'type') return this.type || null;
+    if (name === 'class') return this.className || null;
     return this.attributes.has(name) ? this.attributes.get(name) : null;
   }
 
@@ -70,9 +74,37 @@ class FakeElement {
     if (name === 'id') this.id = String(value);
     if (name === 'name') this.name = String(value);
     if (name === 'type') this.type = String(value);
+    if (name === 'class') this.className = String(value);
   }
 
   addEventListener() {}
+
+  click() {
+    this.clickCount += 1;
+    if (typeof this.onClick === 'function') this.onClick(this);
+
+    if (this.tagName.toLowerCase() === 'label') {
+      const target = this.getAttribute('for')
+        ? this.ownerDocument.querySelector(`#${this.getAttribute('for')}`)
+        : this.querySelector('input, textarea, select');
+      if (target && typeof target.click === 'function') target.click();
+    }
+
+    if (this.tagName.toLowerCase() === 'input') {
+      const type = (this.type || '').toLowerCase();
+      if (type === 'radio' && this.name && this.ownerDocument) {
+        for (const element of this.ownerDocument.querySelectorAll(`input[name="${this.name}"]`)) {
+          if ((element.type || '').toLowerCase() === 'radio') element._checked = false;
+        }
+        this._checked = true;
+      } else if (type === 'checkbox') {
+        this._checked = !this._checked;
+      }
+    }
+
+    this.dispatchEvent({ type: 'click' });
+    return true;
+  }
 
   dispatchEvent(event) {
     this.eventLog.push(event.type);
@@ -137,6 +169,11 @@ function* walk(node) {
   }
 }
 
+function assignOwnerDocument(node, ownerDocument) {
+  node.ownerDocument = ownerDocument;
+  for (const child of node.children) assignOwnerDocument(child, ownerDocument);
+}
+
 function matchesSingleSelector(element, selector) {
   if (!selector) return false;
   if (selector === '*') return true;
@@ -151,6 +188,12 @@ function matchesSingleSelector(element, selector) {
   if (nameMatch) {
     const tagOk = !nameMatch[1] || element.tagName.toLowerCase() === nameMatch[1].toLowerCase();
     return tagOk && element.name === nameMatch[2];
+  }
+
+  const nameValueMatch = selector.match(/^(?:([a-z]+))?\[name="([^"]+)"\]\[value="([^"]+)"\]$/i);
+  if (nameValueMatch) {
+    const tagOk = !nameValueMatch[1] || element.tagName.toLowerCase() === nameValueMatch[1].toLowerCase();
+    return tagOk && element.name === nameValueMatch[2] && String(element.value) === nameValueMatch[3];
   }
 
   return element.tagName.toLowerCase() === selector.toLowerCase();
@@ -218,6 +261,36 @@ function buildDocument() {
     document,
     fields: { firstName, password, csrf, bio, role, agree, planFree, planPro, disabledNote },
   };
+}
+
+function buildControlledRadioDocument() {
+  const document = new FakeDocument();
+  const form = field('form', { id: 'antd-form' });
+  const personalLabel = field('label', { className: 'ant-radio-wrapper', textContent: '个人' });
+  const teamLabel = field('label', { className: 'ant-radio-wrapper', textContent: '组织/团队' });
+  const personal = field('input', { name: 'developerType', type: 'radio', value: '1', checked: false });
+  const team = field('input', { name: 'developerType', type: 'radio', value: '2', checked: false });
+
+  personalLabel.onClick = () => {
+    personal._checked = true;
+    team._checked = false;
+    personalLabel.className = 'ant-radio-wrapper ant-radio-wrapper-checked';
+    teamLabel.className = 'ant-radio-wrapper';
+  };
+  teamLabel.onClick = () => {
+    personal._checked = false;
+    team._checked = true;
+    personalLabel.className = 'ant-radio-wrapper';
+    teamLabel.className = 'ant-radio-wrapper ant-radio-wrapper-checked';
+  };
+
+  personalLabel.appendChild(personal);
+  teamLabel.appendChild(team);
+  form.appendChild(personalLabel);
+  form.appendChild(teamLabel);
+  document.body.appendChild(form);
+
+  return { document, fields: { personal, team, personalLabel, teamLabel } };
 }
 
 async function loadUserscript(document) {
@@ -300,7 +373,7 @@ fields.planPro.directCheckedSetCount = 0;
 
 const filledCount = api.applyRule(captured);
 
-assert.equal(filledCount, 6, 'fills all captured fields');
+assert.equal(filledCount, 5, 'fills captured fields and only applies the selected radio option');
 assert.equal(fields.firstName.value, 'Alice');
 assert.equal(fields.firstName.directValueSetCount, 0, 'uses native value setter instead of direct controlled setter');
 assert.equal(fields.firstName.nativeValueSetCount, 1, 'native value setter receives autofill value');
@@ -309,9 +382,56 @@ assert.equal(fields.role.value, 'admin');
 assert.equal(fields.agree.checked, true);
 assert.equal(fields.planFree.checked, false);
 assert.equal(fields.planPro.checked, true);
-assert.equal(fields.planPro.directCheckedSetCount, 0, 'uses native checked setter instead of direct controlled setter');
-assert.equal(fields.planPro.nativeCheckedSetCount, 1, 'native checked setter receives autofill state');
+assert.equal(fields.planPro.directCheckedSetCount, 0, 'radio click does not use the direct controlled setter');
+assert.equal(fields.planPro.nativeCheckedSetCount, 0, 'radio click does not use the checked setter');
+assert.equal(fields.planPro.clickCount, 1, 'selected radio option is applied through click');
 assert.equal(fields.password.value, 'secret', 'password was not changed by capture or fill');
 assert.equal(fields.csrf.value, 'token-1', 'hidden field was not changed by capture or fill');
+
+const controlled = buildControlledRadioDocument();
+const controlledApi = await loadUserscript(controlled.document);
+const controlledRule = controlledApi.createRule({
+  name: 'controlled-radio',
+  domain: 'example.test',
+  forms: [
+    {
+      selector: '#antd-form',
+      id: 'antd-form',
+      name: '',
+      title: 'AntD form',
+      fields: [
+        {
+          selector: 'input[name="developerType"][value="1"]',
+          name: 'developerType',
+          id: '',
+          type: 'radio',
+          tagName: 'input',
+          label: '个人',
+          value: '1',
+          checked: true,
+          enabled: true,
+        },
+        {
+          selector: 'input[name="developerType"][value="2"]',
+          name: 'developerType',
+          id: '',
+          type: 'radio',
+          tagName: 'input',
+          label: '组织/团队',
+          value: '2',
+          checked: false,
+          enabled: true,
+        },
+      ],
+    },
+  ],
+});
+
+assert.equal(controlledApi.applyRule(controlledRule), 1, 'only the selected radio field counts as filled');
+assert.equal(controlled.fields.personalLabel.clickCount, 1, 'selected radio uses the visible wrapper click path');
+assert.equal(controlled.fields.teamLabel.clickCount, 0, 'unselected radio field does not trigger a click');
+assert.equal(controlled.fields.personal.checked, true);
+assert.equal(controlled.fields.team.checked, false);
+assert.match(controlled.fields.personalLabel.className, /ant-radio-wrapper-checked/);
 
 console.log('smoke test passed');
