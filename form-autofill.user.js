@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         表单自动填写助手
 // @namespace    https://github.com/JinRudy/tampermonkey-form-autofill
-// @version      0.1.4
+// @version      0.1.5
 // @description  手动填写一次表单后保存规则，后续按域名自动回填。
 // @author       wushui
 // @homepageURL  https://github.com/JinRudy/tampermonkey-form-autofill
@@ -27,6 +27,7 @@
   const PANEL_ID = 'tm-form-autofill-recorder-panel';
   const STYLE_ID = 'tm-form-autofill-recorder-style';
   const TEST_MODE = Boolean(window.__FORM_AUTOFILL_RECORDER_TEST__);
+  const appliedFieldValues = new WeakMap();
 
   const uiState = {
     editingRule: null,
@@ -448,6 +449,66 @@
     setTimeout(restoreScroll, 0);
   }
 
+  function documentContains(element) {
+    if (!element) return false;
+    if (document.documentElement && typeof document.documentElement.contains === 'function') {
+      return document.documentElement.contains(element);
+    }
+    return element.ownerDocument === document;
+  }
+
+  function isFillableElement(element) {
+    return Boolean(element && typeof element.matches === 'function' && element.matches(FIELD_SELECTOR));
+  }
+
+  function focusWithoutScroll(element) {
+    if (!element || typeof element.focus !== 'function') return;
+    try {
+      element.focus({ preventScroll: true });
+    } catch (_error) {
+      element.focus();
+    }
+  }
+
+  function captureAutofillSideEffectRestore() {
+    const activeBefore = document.activeElement;
+    const restoreScroll = captureScrollRestore(document.body || document.documentElement);
+    const shouldRestoreFocus =
+      activeBefore &&
+      activeBefore !== document.body &&
+      activeBefore !== document.documentElement &&
+      documentContains(activeBefore) &&
+      typeof activeBefore.focus === 'function';
+
+    return function restoreAutofillSideEffects() {
+      restoreScroll();
+
+      const activeNow = document.activeElement;
+      if (shouldRestoreFocus && activeNow !== activeBefore) {
+        focusWithoutScroll(activeBefore);
+      } else if (
+        activeNow &&
+        activeNow !== activeBefore &&
+        !isOwnUiElement(activeNow) &&
+        isFillableElement(activeNow) &&
+        typeof activeNow.blur === 'function'
+      ) {
+        activeNow.blur();
+      }
+
+      restoreScroll();
+      setTimeout(restoreScroll, 0);
+    };
+  }
+
+  function markAppliedFieldValue(element, signature) {
+    appliedFieldValues.set(element, signature);
+  }
+
+  function wasFieldValueAlreadyApplied(element, signature) {
+    return appliedFieldValues.get(element) === signature;
+  }
+
   function applyField(field) {
     if (!field || field.enabled === false) return false;
     const element = findField(field);
@@ -466,23 +527,39 @@
       return true;
     }
 
+    const restoreFieldScroll = captureScrollRestore(element);
     if (type === 'checkbox') {
-      setNativeProperty(element, 'checked', Boolean(field.checked));
+      const nextChecked = Boolean(field.checked);
+      const signature = `checked:${nextChecked}`;
+      if (element.checked === nextChecked && wasFieldValueAlreadyApplied(element, signature)) return true;
+      setNativeProperty(element, 'checked', nextChecked);
+      markAppliedFieldValue(element, signature);
     } else {
-      setNativeProperty(element, 'value', field.value == null ? '' : String(field.value));
+      const nextValue = field.value == null ? '' : String(field.value);
+      const signature = `value:${nextValue}`;
+      if (String(element.value) === nextValue && wasFieldValueAlreadyApplied(element, signature)) return true;
+      setNativeProperty(element, 'value', nextValue);
+      markAppliedFieldValue(element, signature);
     }
 
     dispatchFieldEvents(element);
+    restoreFieldScroll();
+    setTimeout(restoreFieldScroll, 0);
     return true;
   }
 
   function applyRule(rule) {
     if (!rule || !Array.isArray(rule.forms)) return 0;
+    const restoreSideEffects = captureAutofillSideEffectRestore();
     let count = 0;
-    for (const form of sanitizeForms(rule.forms)) {
-      for (const field of form.fields || []) {
-        if (applyField(field)) count += 1;
+    try {
+      for (const form of sanitizeForms(rule.forms)) {
+        for (const field of form.fields || []) {
+          if (applyField(field)) count += 1;
+        }
       }
+    } finally {
+      restoreSideEffects();
     }
     return count;
   }

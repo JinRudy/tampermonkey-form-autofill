@@ -30,6 +30,7 @@ class FakeElement {
     this.labels = props.labels || [];
     this.className = props.className || '';
     this.onClick = props.onClick || null;
+    this.onDispatch = props.onDispatch || null;
     this.scrollTop = props.scrollTop || 0;
     this.scrollLeft = props.scrollLeft || 0;
     this.scrollHeight = props.scrollHeight || 0;
@@ -114,7 +115,26 @@ class FakeElement {
 
   dispatchEvent(event) {
     this.eventLog.push(event.type);
+    if (typeof this.onDispatch === 'function') this.onDispatch(event, this);
     return true;
+  }
+
+  focus() {
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
+  }
+
+  blur() {
+    if (this.ownerDocument && this.ownerDocument.activeElement === this) {
+      this.ownerDocument.activeElement = this.ownerDocument.body;
+    }
+  }
+
+  contains(target) {
+    if (this === target) return true;
+    for (const child of this.children) {
+      if (child.contains(target)) return true;
+    }
+    return false;
   }
 
   closest(selector) {
@@ -157,6 +177,7 @@ class FakeDocument extends FakeElement {
     this.documentElement.ownerDocument = this;
     this.documentElement.appendChild(this.body);
     this.children = [this.documentElement];
+    this.activeElement = this.body;
   }
 
   createElement(tagName) {
@@ -449,5 +470,59 @@ controlled.fields.scrollContainer.scrollTop = 320;
 assert.equal(controlledApi.applyRule(controlledRule), 1, 'already selected radio still counts as applied');
 assert.equal(controlled.fields.personalLabel.clickCount, 1, 'already visually selected radio is not clicked again');
 assert.equal(controlled.fields.scrollContainer.scrollTop, 320, 'second autofill does not move the scroll position');
+
+const sideEffectDocument = new FakeDocument();
+const sideEffectApi = await loadUserscript(sideEffectDocument);
+const pageScroller = field('div', { scrollTop: 340, scrollHeight: 1400, clientHeight: 400 });
+const sideEffectForm = field('form', { id: 'side-effect-form' });
+const releaseDate = field('input', {
+  id: 'releaseDate',
+  name: 'releaseDate',
+  type: 'text',
+  value: '',
+  onDispatch(event, element) {
+    if (event.type === 'change') {
+      element.focus();
+      pageScroller.scrollTop = 999;
+    }
+  },
+});
+sideEffectForm.appendChild(releaseDate);
+pageScroller.appendChild(sideEffectForm);
+sideEffectDocument.body.appendChild(pageScroller);
+
+const sideEffectRule = sideEffectApi.createRule({
+  name: 'side-effects',
+  domain: 'example.test',
+  forms: [
+    {
+      selector: '#side-effect-form',
+      id: 'side-effect-form',
+      name: '',
+      title: 'Side effect form',
+      fields: [
+        {
+          selector: '#releaseDate',
+          name: 'releaseDate',
+          id: 'releaseDate',
+          type: 'text',
+          tagName: 'input',
+          label: '模型发布日期',
+          value: '2026-06-01',
+          enabled: true,
+        },
+      ],
+    },
+  ],
+});
+
+assert.equal(sideEffectApi.applyRule(sideEffectRule), 1, 'fills a field whose change handler moves focus and scroll');
+assert.equal(releaseDate.value, '2026-06-01');
+assert.deepEqual(releaseDate.eventLog, ['input', 'change']);
+assert.equal(sideEffectDocument.activeElement, sideEffectDocument.body, 'autofill blurs an unintentionally focused page field');
+assert.equal(pageScroller.scrollTop, 340, 'autofill restores scroll changed by field events');
+
+assert.equal(sideEffectApi.applyRule(sideEffectRule), 1, 'already applied same value still counts as filled');
+assert.deepEqual(releaseDate.eventLog, ['input', 'change'], 'already applied same value does not dispatch duplicate events');
 
 console.log('smoke test passed');
